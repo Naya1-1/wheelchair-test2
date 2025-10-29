@@ -339,14 +339,7 @@
           const spanAll = (customization.layout === 'two-column') ? 'grid-column: 1 / -1;' : '';
           const eff = it.ltEffect || 'none';
           const lh = (typeof it.ltLineHeight === 'number' ? it.ltLineHeight : 1.6);
-          const effClass = (eff === 'fade' ? ' anim-fade-in' : (eff === 'slide' ? ' anim-slide-up' : ''));
-          let effAttr = '';
-          if (eff === 'typewriter') {
-            const spd = isFinite(it.ltTwSpeedMs) ? Math.max(5, Math.min(200, Number(it.ltTwSpeedMs))) : 18;
-            const dly = isFinite(it.ltTwDelayMs) ? Math.max(0, Number(it.ltTwDelayMs)) : 0;
-            const caret = (it.ltTwCaret !== false) ? '1' : '0';
-            effAttr = ` data-effect="typewriter" data-tw-speed="${spd}" data-tw-delay="${dly}" data-tw-caret="${caret}"`;
-          }
+          
           // 新增：按项目独立的首字缩进与四边距（仅长文字）
           const indent = isFinite(it.ltFirstIndentPx) ? Math.max(0, Number(it.ltFirstIndentPx)) : 0;
           const pTop = isFinite(it.ltPadTopPx) ? Math.max(0, Number(it.ltPadTopPx)) : 0;
@@ -354,26 +347,69 @@
           const pBottom = isFinite(it.ltPadBottomPx) ? Math.max(0, Number(it.ltPadBottomPx)) : 0;
           const pLeft = isFinite(it.ltPadLeftPx) ? Math.max(0, Number(it.ltPadLeftPx)) : 0;
           const skipFirst = !!it.ltSkipFirstLine;
-          const padTopCss = skipFirst ? `calc(${pTop}px + ${lh}em)` : `${pTop}px`;
-          // 减少内联样式，CSS类已包含基础样式
-          const valStyle = [
+          
+          // 容器样式（不包含 text-indent，由段落独立控制）
+          const containerStyle = [
             valStyleBase,
             `line-height:${lh}`,
-            `text-indent:${indent}px`,
-            `padding-top:${padTopCss}`,
+            // 统一与导出一致：不保留容器级 pre-wrap，避免模板换行成为可视空行
+            `white-space:normal`,
+            `padding-top:${pTop}px`,
             `padding-right:${pRight}px`,
             `padding-bottom:${pBottom}px`,
             `padding-left:${pLeft}px`
           ].filter(Boolean).join('; ');
-          const dataSkip = skipFirst ? ' data-lt-skip-first="1"' : '';
-          return `
-            <div class="st-item" style="display:block; ${spanAll}">
-              <div class="${labelClasses.join(' ')}" style="${lblStyle}">${esc(it.label || '')}</div>
-              <div class="${valueClasses.join(' ')}${effClass}"${effAttr}${dataSkip} style="${valStyle};">
-                ${esc(it.value || '')}
+          
+          // 段落分割与渲染
+          const rawText = it.value || '';
+          const paragraphs = rawText.split('\n');
+          
+          let contentHTML = '';
+          
+          if (eff === 'typewriter') {
+            // 打字机效果：保持整体文本，但使用段落结构支持缩进
+            const spd = isFinite(it.ltTwSpeedMs) ? Math.max(5, Math.min(200, Number(it.ltTwSpeedMs))) : 18;
+            const dly = isFinite(it.ltTwDelayMs) ? Math.max(0, Number(it.ltTwDelayMs)) : 0;
+            const caret = (it.ltTwCaret !== false) ? '1' : '0';
+            const effAttr = ` data-effect="typewriter" data-tw-speed="${spd}" data-tw-delay="${dly}" data-tw-caret="${caret}"`;
+            const dataSkip = skipFirst ? ' data-lt-skip-first="1"' : '';
+            const effClass = ' anim-typewriter';
+            
+            // 为打字机效果生成段落HTML，每段独立缩进
+            contentHTML = paragraphs.map((para, idx) => {
+              const shouldIndent = !(idx === 0 && skipFirst);
+              const pStyle = `margin:0; padding:0; text-indent:${shouldIndent ? indent : 0}px;`;
+              return `<p style="${pStyle}">${esc(para)}</p>`;
+            }).join('');
+            
+            return `
+              <div class="st-item" style="display:block; ${spanAll}">
+                <div class="${labelClasses.join(' ')}" style="${lblStyle}">${esc(it.label || '')}</div>
+                <div class="${valueClasses.join(' ')}${effClass}"${effAttr}${dataSkip} style="${containerStyle}">
+                  ${contentHTML}
+                </div>
               </div>
-            </div>
-          `;
+            `;
+          } else {
+            // 普通效果（fade/slide/none）：按段落分割渲染
+            const effClass = (eff === 'fade' ? ' anim-fade-in' : (eff === 'slide' ? ' anim-slide-up' : ''));
+            
+            // 为每个段落生成独立的 <p> 元素，应用首字缩进
+            contentHTML = paragraphs.map((para, idx) => {
+              const shouldIndent = !(idx === 0 && skipFirst);
+              const pStyle = `margin:0; padding:0; text-indent:${shouldIndent ? indent : 0}px;`;
+              return `<p style="${pStyle}">${esc(para)}</p>`;
+            }).join('');
+            
+            return `
+              <div class="st-item" style="display:block; ${spanAll}">
+                <div class="${labelClasses.join(' ')}" style="${lblStyle}">${esc(it.label || '')}</div>
+                <div class="${valueClasses.join(' ')}${effClass}" style="${containerStyle}">
+                  ${contentHTML}
+                </div>
+              </div>
+            `;
+          }
         }
 
         if (it.type === 'bar') {
@@ -842,24 +878,85 @@
       try {
         const nodes = wrapper?.querySelectorAll('.st-longtext[data-effect="typewriter"]');
         nodes?.forEach(el => {
-          const full = el.textContent || '';
-          el.textContent = '';
+          // 获取所有段落元素
+          const paragraphs = el.querySelectorAll('p');
+          if (!paragraphs || paragraphs.length === 0) {
+            // 回退增强：动态创建段落并逐段打字，保持分段结构
+            const raw = el.textContent || '';
+            // 清空容器，准备插入段落
+            el.textContent = '';
+            const spd = Math.max(5, Math.min(200, parseInt(el.getAttribute('data-tw-speed') || '18', 10) || 18));
+            const delay = Math.max(0, parseInt(el.getAttribute('data-tw-delay') || '0', 10) || 0);
+            const caretOn = (el.getAttribute('data-tw-caret') !== '0');
+            const parts = raw.split('\n');
+            const created = parts.map(function(para){
+              const p = global.document.createElement('p');
+              // 保留基础段落样式，缩进在无状态时默认为0
+              p.setAttribute('style', 'margin:0; padding:0;');
+              el.appendChild(p);
+              return { node: p, text: para };
+            });
+            let cumulativeDelay = delay;
+            created.forEach(function(entry){
+              var p = entry.node;
+              var fullText = entry.text || '';
+              var charIndex = 0;
+              // 逐字符渲染当前段落
+              var typeParagraph = function() {
+                if (charIndex >= fullText.length) {
+                  p.textContent = fullText;
+                  return;
+                }
+                charIndex++;
+                if (caretOn && charIndex < fullText.length) {
+                  p.textContent = fullText.slice(0, charIndex) + '▌';
+                } else {
+                  p.textContent = fullText.slice(0, charIndex);
+                }
+                global.setTimeout(typeParagraph, spd);
+              };
+              global.setTimeout(typeParagraph, cumulativeDelay);
+              cumulativeDelay += fullText.length * spd;
+            });
+            return;
+          }
+          
+          // 新逻辑：逐段落打字，保持段落结构和首字缩进
           const spd = Math.max(5, Math.min(200, parseInt(el.getAttribute('data-tw-speed') || '18', 10) || 18));
-          const delay = Math.max(0, parseInt(el.getAttribute('data-tw-delay') || '0', 10) || 0);
+          const baseDelay = Math.max(0, parseInt(el.getAttribute('data-tw-delay') || '0', 10) || 0);
           const caretOn = (el.getAttribute('data-tw-caret') !== '0');
-          let i = 0;
-          let timer;
-          const tick = function(){
-            if (i >= full.length) { el.textContent = full; return; }
-            i++;
-            if (caretOn && i < full.length) {
-              el.textContent = full.slice(0, i) + '▌';
-            } else {
-              el.textContent = full.slice(0, i);
-            }
-            timer = global.setTimeout(tick, spd);
-          };
-          global.setTimeout(tick, delay);
+          
+          let cumulativeDelay = baseDelay;
+          
+          paragraphs.forEach((p, pIdx) => {
+            const fullText = p.textContent || '';
+            const originalStyle = p.getAttribute('style') || ''; // 保存原始样式
+            p.textContent = '\u00A0'; // 清空段落内容但保留标签
+            
+            let charIndex = 0;
+            
+            const typeParagraph = function() {
+              if (charIndex >= fullText.length) {
+                p.textContent = fullText;
+                return;
+              }
+              
+              charIndex++;
+              if (caretOn && charIndex < fullText.length) {
+                p.textContent = fullText.slice(0, charIndex) + '▌';
+              } else {
+                p.textContent = fullText.slice(0, charIndex);
+              }
+              
+              global.setTimeout(typeParagraph, spd);
+            };
+            
+            // 启动当前段落的打字效果，使用累积延迟确保顺序
+            global.setTimeout(typeParagraph, cumulativeDelay);
+            
+            // 计算下一段落的起始延迟：当前段落字符数 × 打字速度
+            cumulativeDelay += fullText.length * spd;
+          });
         });
       } catch (_e) {}
     }
